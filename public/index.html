@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Tienda de Prueba - MODO</title>
-  <script src="https://ecommerce-modal.preprod.modo.com.ar/bundle.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -72,7 +71,7 @@
 
 <div class="card">
   <h1>Tienda de Prueba</h1>
-  <p class="subtitle">Integración MODO SDK v2 · Pre-producción</p>
+  <p class="subtitle">Integración MODO · Redirección al Site de Pagos · Pre-producción</p>
 
   <div class="product">
     <div class="product-icon">🧪</div>
@@ -87,7 +86,7 @@
     <input type="number" id="amount" value="50.00" min="30" step="0.01">
   </div>
 
-  <button class="btn-modo" id="btnPagar" onclick="showModal()">
+  <button class="btn-modo" id="btnPagar" onclick="goToCheckout()">
     Pagá con MODO
   </button>
 
@@ -101,6 +100,11 @@
 </div>
 
 <script>
+  // Base del site de pagos de MODO según el ambiente.
+  // Pre-producción: https://site.preprod.modo.com.ar/checkout
+  // Producción:      https://site.modo.com.ar/checkout
+  const MODO_SITE_PAGOS_URL = 'https://site.preprod.modo.com.ar/checkout';
+
   const statusEl = document.getElementById('status');
   const btnEl = document.getElementById('btnPagar');
 
@@ -109,7 +113,8 @@
     statusEl.textContent = msg;
   }
 
-  async function createPaymentIntention() {
+  // 1. Pide al backend del e-commerce que genere el payment request contra MODO.
+  async function createPaymentRequest() {
     const amount = parseFloat(document.getElementById('amount').value) || 50;
     setStatus('Creando intención de cobro...', 'info');
 
@@ -125,42 +130,52 @@
     }
 
     const data = await res.json();
-    setStatus('Payment request creado: ' + data.id, 'success');
-
-    return { checkoutId: data.id, qrString: data.qr, deeplink: data.deeplink };
+    return data.id;
   }
 
-  async function showModal() {
+  // 2. Redirige al site de pagos de MODO con el id y las URLs de retorno.
+  async function goToCheckout() {
     try {
       btnEl.disabled = true;
-      btnEl.textContent = 'Generando QR...';
+      btnEl.textContent = 'Redirigiendo...';
 
-      const modalData = await createPaymentIntention();
+      const paymentRequestId = await createPaymentRequest();
 
-      ModoSDK.modoInitPayment({
-        version: '2',
-        qrString: modalData.qrString,
-        checkoutId: modalData.checkoutId,
-        deeplink: {
-          url: modalData.deeplink,
-          callbackURL: window.location.href,
-          callbackURLSuccess: window.location.href + '?status=success',
-        },
-        callbackURL: window.location.href + '?status=success',
-        refreshData: createPaymentIntention,
-        onSuccess: function () { setStatus('Pago exitoso!', 'success'); },
-        onFailure: function () { setStatus('El pago falló.', 'error'); },
-        onCancel: function () { setStatus('Pago cancelado.', 'info'); },
-        onClose: function () {},
-      });
+      const callbackSuccess = window.location.origin + window.location.pathname + '?status=success';
+      const callback = window.location.origin + window.location.pathname + '?status=error';
+
+      const url = new URL(MODO_SITE_PAGOS_URL);
+      url.searchParams.set('id', paymentRequestId);
+      url.searchParams.set('callbackSuccess', callbackSuccess);
+      url.searchParams.set('callback', callback);
+
+      window.location.href = url.toString();
 
     } catch (error) {
       setStatus('Error: ' + error.message, 'error');
-    } finally {
       btnEl.disabled = false;
       btnEl.textContent = 'Pagá con MODO';
     }
   }
+
+  // Al volver desde el site de pagos (callback / callbackSuccess), muestra el resultado.
+  // El reintento es manual: si falló, el usuario vuelve a tocar "Pagá con MODO",
+  // lo que genera un payment request NUEVO y redirige de nuevo (ya no hay reintento automático).
+  (function handleReturnFromCheckout() {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get('status');
+
+    if (status === 'success') {
+      setStatus('Pago exitoso!', 'success');
+    } else if (status === 'error') {
+      setStatus('El pago falló o fue abandonado. Podés volver a intentarlo.', 'error');
+    }
+
+    if (status) {
+      // Limpia el query param para que un refresh no vuelva a mostrar el mismo estado.
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  })();
 </script>
 </body>
 </html>
